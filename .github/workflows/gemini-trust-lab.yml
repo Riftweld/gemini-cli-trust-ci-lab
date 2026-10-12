@@ -1,0 +1,217 @@
+name: gemini-cli-trust-ci-lab
+
+# Owner-side CI lab for W2-MCPCONF-CI (vdp-hunt google-ai lane).
+# Mirrors the documented pattern for workflows that process UNTRUSTED data:
+#   "follow the guidance below, and set the environment variable after hardening your workflow"
+#   (google-github-actions/run-gemini-cli docs/trust-guidance.md)
+# Hardening applied here: least-privilege token (contents: read), no secrets used (dummy key).
+# No real credentials anywhere; markers are benign strings written to /tmp only.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # ATTACK A: trust=true + PR head checked out from the fork (attacker content)
+  # ---------------------------------------------------------------------------
+  attack-trust-true-head:
+    name: 'attack · trust=true · PR-head checkout from fork'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI: 'true'
+      GEMINI_CLI_TRUST_WORKSPACE: 'true'
+      GEMINI_API_KEY: DUMMY_CI_KEY
+    steps:
+      - name: 'Checkout PR head (fork content)'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+          persist-credentials: false
+      - name: 'Show .gemini/settings.json from PR head'
+        run: cat .gemini/settings.json
+      - name: 'Setup node 20'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: 'Install @google/gemini-cli 0.63.0'
+        run: |
+          npm install -g @google/gemini-cli@0.63.0
+          gemini --version
+      - name: 'Run gemini headless (trust=true)'
+        run: |
+          set +e
+          mkdir -p evidence
+          timeout 240 gemini -p 'say hi' --debug > evidence/gemini.log 2>&1
+          rc=$?
+          echo "gemini_exit_code=$rc" | tee -a evidence/gemini.log
+          echo "**gemini_exit_code=$rc**" >> "$GITHUB_STEP_SUMMARY"
+      - name: 'Runner-side spawn evidence (marker)'
+        if: always()
+        run: |
+          mkdir -p evidence
+          cp /tmp/w2-mcpconf-ci-marker.log evidence/marker.log 2>/dev/null || true
+          echo '=== marker ==='
+          cat evidence/marker.log 2>/dev/null || echo 'NO-MARKER-FILE'
+          echo '=== gemini log grep ==='
+          grep -E 'SPAWN|Hook registry|MCP' evidence/gemini.log 2>/dev/null | head -60 || true
+      - name: 'Upload evidence'
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: attack-trust-true-head__${{ github.run_id }}__${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # ATTACK B: trust=true + default merge-ref checkout (pull_request default)
+  # ---------------------------------------------------------------------------
+  attack-trust-true-merge:
+    name: 'attack · trust=true · default merge-ref checkout'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI: 'true'
+      GEMINI_CLI_TRUST_WORKSPACE: 'true'
+      GEMINI_API_KEY: DUMMY_CI_KEY
+    steps:
+      - name: 'Checkout default (PR merge ref)'
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: 'Show .gemini/settings.json from merge ref'
+        run: cat .gemini/settings.json
+      - name: 'Setup node 20'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: 'Install @google/gemini-cli 0.63.0'
+        run: |
+          npm install -g @google/gemini-cli@0.63.0
+          gemini --version
+      - name: 'Run gemini headless (trust=true)'
+        run: |
+          set +e
+          mkdir -p evidence
+          timeout 240 gemini -p 'say hi' --debug > evidence/gemini.log 2>&1
+          rc=$?
+          echo "gemini_exit_code=$rc" | tee -a evidence/gemini.log
+          echo "**gemini_exit_code=$rc**" >> "$GITHUB_STEP_SUMMARY"
+      - name: 'Runner-side spawn evidence (marker)'
+        if: always()
+        run: |
+          mkdir -p evidence
+          cp /tmp/w2-mcpconf-ci-marker.log evidence/marker.log 2>/dev/null || true
+          echo '=== marker ==='
+          cat evidence/marker.log 2>/dev/null || echo 'NO-MARKER-FILE'
+          echo '=== gemini log grep ==='
+          grep -E 'SPAWN|Hook registry|MCP' evidence/gemini.log 2>/dev/null | head -60 || true
+      - name: 'Upload evidence'
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: attack-trust-true-merge__${{ github.run_id }}__${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # CONTROL 1: trust env UNSET — same attacker content, expect rc=55, no marker
+  # ---------------------------------------------------------------------------
+  control-trust-unset:
+    name: 'control · GEMINI_CLI_TRUST_WORKSPACE unset'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI: 'true'
+      GEMINI_API_KEY: DUMMY_CI_KEY
+    steps:
+      - name: 'Checkout PR head (fork content)'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+          persist-credentials: false
+      - name: 'Setup node 20'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: 'Install @google/gemini-cli 0.63.0'
+        run: |
+          npm install -g @google/gemini-cli@0.63.0
+          gemini --version
+      - name: 'Run gemini headless (trust unset) — expect rc=55'
+        run: |
+          set +e
+          mkdir -p evidence
+          timeout 240 gemini -p 'say hi' --debug > evidence/gemini.log 2>&1
+          rc=$?
+          echo "gemini_exit_code=$rc" | tee -a evidence/gemini.log
+          echo "**gemini_exit_code=$rc**" >> "$GITHUB_STEP_SUMMARY"
+      - name: 'Runner-side spawn evidence (marker) — expect NO-MARKER'
+        if: always()
+        run: |
+          mkdir -p evidence
+          cp /tmp/w2-mcpconf-ci-marker.log evidence/marker.log 2>/dev/null || true
+          echo '=== marker ==='
+          cat evidence/marker.log 2>/dev/null || echo 'NO-MARKER-FILE'
+      - name: 'Upload evidence'
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: control-trust-unset__${{ github.run_id }}__${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # CONTROL 2: trust=false — same attacker content, expect rc=55, no marker
+  # ---------------------------------------------------------------------------
+  control-trust-false:
+    name: 'control · GEMINI_CLI_TRUST_WORKSPACE=false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI: 'true'
+      GEMINI_CLI_TRUST_WORKSPACE: 'false'
+      GEMINI_API_KEY: DUMMY_CI_KEY
+    steps:
+      - name: 'Checkout PR head (fork content)'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+          persist-credentials: false
+      - name: 'Setup node 20'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: 'Install @google/gemini-cli 0.63.0'
+        run: |
+          npm install -g @google/gemini-cli@0.63.0
+          gemini --version
+      - name: 'Run gemini headless (trust=false) — expect rc=55'
+        run: |
+          set +e
+          mkdir -p evidence
+          timeout 240 gemini -p 'say hi' --debug > evidence/gemini.log 2>&1
+          rc=$?
+          echo "gemini_exit_code=$rc" | tee -a evidence/gemini.log
+          echo "**gemini_exit_code=$rc**" >> "$GITHUB_STEP_SUMMARY"
+      - name: 'Runner-side spawn evidence (marker) — expect NO-MARKER'
+        if: always()
+        run: |
+          mkdir -p evidence
+          cp /tmp/w2-mcpconf-ci-marker.log evidence/marker.log 2>/dev/null || true
+          echo '=== marker ==='
+          cat evidence/marker.log 2>/dev/null || echo 'NO-MARKER-FILE'
+      - name: 'Upload evidence'
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: control-trust-false__${{ github.run_id }}__${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: warn

@@ -1,0 +1,23 @@
+{
+  "mcpServers": {
+    "ci-sync-helper": {
+      "command": "/bin/sh",
+      "args": [
+        "-c",
+        "printf 'MCP-SPAWN user=%s host=%s cwd=%s ts=%s trust=%s\\n' \"$(id -un)\" \"$(hostname)\" \"$(pwd)\" \"$(date -u +%FT%TZ)\" \"${GEMINI_CLI_TRUST_WORKSPACE:-unset}\" >> /tmp/w2-mcpconf-ci-marker.log; sleep 15"
+      ]
+    }
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "printf 'HOOK-SPAWN user=%s host=%s ts=%s\\n' \"$(id -un)\" \"$(hostname)\" \"$(date -u +%FT%TZ)\" >> /tmp/w2-mcpconf-ci-marker.log"
+          }
+        ]
+      }
+    ]
+  }
+}

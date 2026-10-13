@@ -309,7 +309,7 @@ jobs:
     if: >-
       github.event_name == 'pull_request_review' &&
       startsWith(github.event.review.body || '', '/lab-review') &&
-      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.review.author_association)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -369,7 +369,7 @@ jobs:
     if: >-
       github.event_name == 'pull_request_review' &&
       startsWith(github.event.review.body || '', '/lab-review') &&
-      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.review.author_association)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:

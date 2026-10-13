@@ -1,0 +1,52 @@
+name: maint-call-dispatch
+
+# Maintainer-triggered dispatch, mirroring the official
+# google-github-actions/run-gemini-cli gemini-dispatch.yml gate shape:
+#   - trigger: issue_comment on a PR
+#   - gate: comment starts with '@gemini-cli' AND author_association is
+#     OWNER / MEMBER / COLLABORATOR (i.e. a maintainer fires the review)
+#   - action: call the reusable review workflow via workflow_call
+#     (`uses: './.github/workflows/maint-callable-review.yml'`)
+# Lab command string: '@gemini-cli /lab-review' (same shape as the official
+# '@gemini-cli /review', distinct command so it cannot collide with other jobs).
+# Hardening: least-privilege token; zero secrets. Benign markers only.
+
+on:
+  issue_comment:
+    types: [created]
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  dispatch:
+    if: >-
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '@gemini-cli /lab-review') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      pr: '${{ github.event.issue.number }}'
+    steps:
+      - name: 'Maintainer gate evidence'
+        run: |
+          echo "gate=maintainer-triggered"
+          echo "comment_author_association=${{ github.event.comment.author_association }}"
+          echo "comment_author=${{ github.event.comment.user.login }}"
+          echo "comment_id=${{ github.event.comment.id }}"
+          echo "issue_number=${{ github.event.issue.number }}"
+          echo "event=${{ github.event_name }}.${{ github.event.action }}"
+          echo "**maintainer gate passed** — was dispatched by a maintainer-authored comment" >> "$GITHUB_STEP_SUMMARY"
+
+  review:
+    needs: 'dispatch'
+    uses: './.github/workflows/maint-callable-review.yml'
+    permissions:
+      contents: read
+      pull-requests: read
+    with:
+      pr: '${{ needs.dispatch.outputs.pr }}'

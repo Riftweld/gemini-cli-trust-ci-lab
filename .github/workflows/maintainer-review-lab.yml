@@ -1,0 +1,257 @@
+name: maintainer-review-lab
+
+# Owner-side CI lab for W2-MCPCONF-CI addendum (vdp-hunt google-ai lane).
+# MIRROR of a maintainer-triggered review flow processing a fork PR: the trigger is
+# a maintainer action (issue_comment by OWNER/MEMBER/COLLABORATOR — the same gate
+# shape as the official google-github-actions/run-gemini-cli gemini-dispatch.yml —
+# or a manual workflow_dispatch), and the review checks out the PR head into the
+# workspace (as review flows that process PR code do), then runs gemini with
+# GEMINI_CLI_TRUST_WORKSPACE='true' exactly as the official trust guidance states
+# ("Prefer workflows where the PR review is kicked off intentionally by a
+# maintainer ... and then set the environment variable after hardening").
+# Hardening applied: least-privilege token (contents: read), zero secrets (dummy key).
+# No real credentials anywhere; markers are benign strings written to /tmp only.
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'PR number to review'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # ATTACK: maintainer-triggered review, trust=true, PR head checked out (fork)
+  # ---------------------------------------------------------------------------
+  maint-trust-true:
+    name: 'maintainer review · trust=true · PR-head checkout from fork'
+    if: >-
+      github.event_name == 'workflow_dispatch' || (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        startsWith(github.event.comment.body, '/lab-review') &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI: 'true'
+      GEMINI_CLI_TRUST_WORKSPACE: 'true'
+      GEMINI_API_KEY: DUMMY_CI_KEY
+    steps:
+      - name: 'Resolve PR head (maintainer-selected review target)'
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: '${{ github.event_name == ''workflow_dispatch'' && inputs.pr || github.event.issue.number }}'
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" > /tmp/pr.json
+          {
+            echo "head_repo=$(jq -r .head.repo.full_name /tmp/pr.json)"
+            echo "head_ref=$(jq -r .head.ref /tmp/pr.json)"
+            echo "head_sha=$(jq -r .head.sha /tmp/pr.json)"
+          } >> "$GITHUB_OUTPUT"
+          jq -r '"maintainer review target: " + .head.label' /tmp/pr.json
+      - name: 'Checkout PR head (fork content)'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.pr.outputs.head_repo }}
+          ref: ${{ steps.pr.outputs.head_ref }}
+          persist-credentials: false
+      - name: 'Show .gemini/settings.json from PR head'
+        run: cat .gemini/settings.json
+      - name: 'Setup node 20'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: 'Install @google/gemini-cli 0.63.0'
+        run: |
+          npm install -g @google/gemini-cli@0.63.0
+          gemini --version
+      - name: 'Run gemini headless (maintainer trigger, trust=true)'
+        run: |
+          set +e
+          mkdir -p evidence
+          timeout 240 gemini -p 'say hi' --debug > evidence/gemini.log 2>&1
+          rc=$?
+          echo "gemini_exit_code=$rc" | tee -a evidence/gemini.log
+          echo "**gemini_exit_code=$rc**" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "trigger_event=${{ github.event_name }}"
+            echo "pr_head_sha=${{ steps.pr.outputs.head_sha }}"
+          } | tee evidence/trigger.txt
+      - name: 'Runner-side spawn evidence (marker)'
+        if: always()
+        run: |
+          mkdir -p evidence
+          cp /tmp/w2-mcpconf-ci-marker.log evidence/marker.log 2>/dev/null || true
+          echo '=== marker ==='
+          cat evidence/marker.log 2>/dev/null || echo 'NO-MARKER-FILE'
+          echo '=== gemini log grep ==='
+          grep -E 'SPAWN|Hook registry|MCP' evidence/gemini.log 2>/dev/null | head -60 || true
+      - name: 'Upload evidence'
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: maint-trust-true__${{ github.run_id }}__${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # CONTROL 1: same maintainer flow, trust env UNSET — expect rc=55, no marker
+  # ---------------------------------------------------------------------------
+  maint-control-trust-unset:
+    name: 'maintainer review · GEMINI_CLI_TRUST_WORKSPACE unset'
+    if: >-
+      github.event_name == 'workflow_dispatch' || (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        startsWith(github.event.comment.body, '/lab-review') &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI: 'true'
+      GEMINI_API_KEY: DUMMY_CI_KEY
+    steps:
+      - name: 'Resolve PR head (maintainer-selected review target)'
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: '${{ github.event_name == ''workflow_dispatch'' && inputs.pr || github.event.issue.number }}'
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" > /tmp/pr.json
+          {
+            echo "head_repo=$(jq -r .head.repo.full_name /tmp/pr.json)"
+            echo "head_ref=$(jq -r .head.ref /tmp/pr.json)"
+            echo "head_sha=$(jq -r .head.sha /tmp/pr.json)"
+          } >> "$GITHUB_OUTPUT"
+          jq -r '"maintainer review target: " + .head.label' /tmp/pr.json
+      - name: 'Checkout PR head (fork content)'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.pr.outputs.head_repo }}
+          ref: ${{ steps.pr.outputs.head_ref }}
+          persist-credentials: false
+      - name: 'Setup node 20'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: 'Install @google/gemini-cli 0.63.0'
+        run: |
+          npm install -g @google/gemini-cli@0.63.0
+          gemini --version
+      - name: 'Run gemini headless (maintainer trigger, trust unset) — expect rc=55'
+        run: |
+          set +e
+          mkdir -p evidence
+          timeout 240 gemini -p 'say hi' --debug > evidence/gemini.log 2>&1
+          rc=$?
+          echo "gemini_exit_code=$rc" | tee -a evidence/gemini.log
+          echo "**gemini_exit_code=$rc**" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "trigger_event=${{ github.event_name }}"
+            echo "pr_head_sha=${{ steps.pr.outputs.head_sha }}"
+          } | tee evidence/trigger.txt
+      - name: 'Runner-side spawn evidence (marker) — expect NO-MARKER'
+        if: always()
+        run: |
+          mkdir -p evidence
+          cp /tmp/w2-mcpconf-ci-marker.log evidence/marker.log 2>/dev/null || true
+          echo '=== marker ==='
+          cat evidence/marker.log 2>/dev/null || echo 'NO-MARKER-FILE'
+      - name: 'Upload evidence'
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: maint-control-trust-unset__${{ github.run_id }}__${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # CONTROL 2: same maintainer flow, trust=false — expect rc=55, no marker
+  # ---------------------------------------------------------------------------
+  maint-control-trust-false:
+    name: 'maintainer review · GEMINI_CLI_TRUST_WORKSPACE=false'
+    if: >-
+      github.event_name == 'workflow_dispatch' || (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        startsWith(github.event.comment.body, '/lab-review') &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI: 'true'
+      GEMINI_CLI_TRUST_WORKSPACE: 'false'
+      GEMINI_API_KEY: DUMMY_CI_KEY
+    steps:
+      - name: 'Resolve PR head (maintainer-selected review target)'
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: '${{ github.event_name == ''workflow_dispatch'' && inputs.pr || github.event.issue.number }}'
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" > /tmp/pr.json
+          {
+            echo "head_repo=$(jq -r .head.repo.full_name /tmp/pr.json)"
+            echo "head_ref=$(jq -r .head.ref /tmp/pr.json)"
+            echo "head_sha=$(jq -r .head.sha /tmp/pr.json)"
+          } >> "$GITHUB_OUTPUT"
+          jq -r '"maintainer review target: " + .head.label' /tmp/pr.json
+      - name: 'Checkout PR head (fork content)'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.pr.outputs.head_repo }}
+          ref: ${{ steps.pr.outputs.head_ref }}
+          persist-credentials: false
+      - name: 'Setup node 20'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: 'Install @google/gemini-cli 0.63.0'
+        run: |
+          npm install -g @google/gemini-cli@0.63.0
+          gemini --version
+      - name: 'Run gemini headless (maintainer trigger, trust=false) — expect rc=55'
+        run: |
+          set +e
+          mkdir -p evidence
+          timeout 240 gemini -p 'say hi' --debug > evidence/gemini.log 2>&1
+          rc=$?
+          echo "gemini_exit_code=$rc" | tee -a evidence/gemini.log
+          echo "**gemini_exit_code=$rc**" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "trigger_event=${{ github.event_name }}"
+            echo "pr_head_sha=${{ steps.pr.outputs.head_sha }}"
+          } | tee evidence/trigger.txt
+      - name: 'Runner-side spawn evidence (marker) — expect NO-MARKER'
+        if: always()
+        run: |
+          mkdir -p evidence
+          cp /tmp/w2-mcpconf-ci-marker.log evidence/marker.log 2>/dev/null || true
+          echo '=== marker ==='
+          cat evidence/marker.log 2>/dev/null || echo 'NO-MARKER-FILE'
+      - name: 'Upload evidence'
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: maint-control-trust-false__${{ github.run_id }}__${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: warn
